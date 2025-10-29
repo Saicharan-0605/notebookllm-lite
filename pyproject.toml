@@ -1,0 +1,16 @@
+[project]
+name = "notebookllm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "fastapi[standard]>=0.120.1",
+    "google-api-python-client>=2.185.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.2",
+    "google-cloud-discoveryengine>=0.15.0",
+    "pydantic>=2.12.3",
+    "pydantic-settings>=2.11.0",
+]
