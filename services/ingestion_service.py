@@ -8,6 +8,7 @@ from fastapi import UploadFile, HTTPException, status
 from utils.settings import settings
 from schemas.document import IngestResponse
 from services.gcs_service import _get_or_create_bucket, _upload_file_to_gcs
+from services.database import save_document_to_db
 
 
 def _ingest_document_from_gcs(
@@ -93,6 +94,7 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
     # Step 2: Read and upload file to GCS
     try:
         file_content = await file.read()
+        file_size=len(file_content)
         
         if len(file_content) == 0:
             raise HTTPException(
@@ -129,6 +131,17 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to ingest document: {str(e)}"
         )
+    try:
+        save_document_to_db(
+            engine_id=engine_id,
+            data_store_id=data_store_id,
+            filename=file.filename,
+            gcs_uri=gcs_uri,
+            file_size=file_size,
+            content_type=file.content_type or "application/octet-stream"
+        )
+    except Exception as e:
+        print(f"⚠️  Failed to save document to database: {e}")
     
     # Build response
     response = IngestResponse(
@@ -144,5 +157,5 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
         )
     )
     
-    print(f"\n✅ Ingestion complete!")
+    print(f"\n Ingestion complete!")
     return response

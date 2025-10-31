@@ -73,3 +73,11 @@ class IngestResponse(BaseModel):
     gcs_uri: str
     operation_name: Optional[str] = None
     message: str
+
+class EngineInfo(BaseModel):
+    """Engine information from database."""
+    id: int
+    engine_id: str
+    engine_name: str
+    data_store_id: str
+    created_at: str

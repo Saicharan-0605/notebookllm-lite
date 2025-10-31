@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import List
 from fastapi import FastAPI, HTTPException, status,UploadFile, File, Form,APIRouter
 from pydantic import BaseModel, Field
 from google.api_core.exceptions import  NotFound
@@ -7,8 +7,9 @@ from google.cloud.discoveryengine_v1 import (
     EngineServiceClient  
 )
 
-from services.create_engine import _create_enterprise_engine_logic,get_engine_details
-from schemas.document import EngineCreationRequest,EngineResponse
+from services.create_engine import _create_enterprise_engine_logic,get_engines_details
+from schemas.document import EngineCreationRequest,EngineResponse,EngineInfo
+from services.database import get_all_engines_from_db
 
 router = APIRouter()
 
@@ -86,7 +87,7 @@ async def get_engine_details(engine_id: str):
     - **engine_id**: The ID of the engine to retrieve
     """
     try:
-        return get_engine_details(engine_id)
+        return await get_engines_details(engine_id)
         
     except NotFound:
         raise HTTPException(
@@ -97,4 +98,29 @@ async def get_engine_details(engine_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve engine. Error: {str(e)}"
+        )
+
+
+@router.get(
+    "/engines",
+    response_model=List[EngineInfo],
+    summary="List All Engines",
+    status_code=status.HTTP_200_OK
+)
+
+
+async def list_engines():
+    """
+    Retrieve all engines from the database.
+    
+    Returns a list of all engines that have been created through this API,
+    including their engine ID, name, data store ID, and creation time.
+    """
+    try:
+        engines = get_all_engines_from_db()
+        return [EngineInfo(**engine) for engine in engines]
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve engines from database: {str(e)}"
         )

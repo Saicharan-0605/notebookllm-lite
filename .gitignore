@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+env
 
 __init__.py
+
+gcp_creds.json
