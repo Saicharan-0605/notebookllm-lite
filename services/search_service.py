@@ -16,20 +16,14 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from schemas.document import IngestResponse, QueryResponse, SearchResult, Citation,ExtractiveAnswer,ExtractiveSegment
 from dotenv import load_dotenv
 
-# Load environment variables from a .env file
+from utils.settings import settings
+PROJECT_ID = settings.PROJECT_ID
+LOCATION = settings.LOCATION
+
 load_dotenv()
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-PROJECT_ID = "gcp-agents-personal"
-LOCATION = "global"
-DATA_STORE_ID = "agent-space_1761539656965"
-ENGINE_ID = "notebooklm-search-engine"
 
-# ============================================================================
-# AUTHENTICATION HELPER
-# ============================================================================
+
 def get_gcp_credentials():
     """
     Loads Google Cloud credentials from a service account file.
@@ -49,84 +43,6 @@ def get_gcp_credentials():
         )
     
     return service_account.Credentials.from_service_account_file(credentials_path)
-
-# ============================================================================
-# SERVICE FUNCTIONS
-# ============================================================================
-
-def create_enterprise_engine():
-    """
-    Create an Enterprise Edition engine using a service account for authentication.
-    """
-    credentials = get_gcp_credentials()
-    client = EngineServiceClient(credentials=credentials)
-    
-    parent = f"projects/{PROJECT_ID}/locations/{LOCATION}/collections/default_collection"
-
-    engine = Engine(
-        display_name="NotebookLM Search Engine",
-        solution_type="SOLUTION_TYPE_SEARCH",
-        data_store_ids=[DATA_STORE_ID],
-        search_engine_config=Engine.SearchEngineConfig(
-            search_tier="SEARCH_TIER_ENTERPRISE",
-            search_add_ons=["SEARCH_ADD_ON_LLM"],
-        ),
-        industry_vertical="GENERIC",
-    )
-
-    request = {
-        "parent": parent,
-        "engine": engine,
-        "engine_id": ENGINE_ID,
-    }
-
-    try:
-        print("Attempting to create enterprise engine...")
-        operation = client.create_engine(request=request)
-        response = operation.result(timeout=900)
-        print("Engine created successfully.")
-        return response
-    except AlreadyExists:
-        print(f"Engine '{ENGINE_ID}' already exists. Skipping creation.")
-        engine_name = f"{parent}/engines/{ENGINE_ID}"
-        return client.get_engine(name=engine_name)
-    except Exception as e:
-        print(f"Error creating engine: {e}")
-        raise
-
-def ingest_documents_service(gcs_uri: str) -> IngestResponse:
-    """
-    Ingest a document from GCS using a service account for authentication.
-    """
-    credentials = get_gcp_credentials()
-    client = DocumentServiceClient(credentials=credentials)
-    
-    parent_path = client.branch_path(
-        project=PROJECT_ID,
-        location=LOCATION,
-        data_store=DATA_STORE_ID,
-        branch="default_branch",
-    )
-
-    gcs_source = GcsSource(input_uris=[gcs_uri], data_schema="content")
-    request = ImportDocumentsRequest(
-        parent=parent_path,
-        gcs_source=gcs_source,
-        reconciliation_mode=ImportDocumentsRequest.ReconciliationMode.INCREMENTAL,
-    )
-
-    operation = client.import_documents(request=request)
-    response = operation.result(timeout=300)
-    metadata = operation.metadata
-
-    time.sleep(30)
-
-    return IngestResponse(
-        success_count=metadata.success_count,
-        failure_count=metadata.failure_count,
-        operation_name=operation.operation.name if metadata.failure_count > 0 else None,
-    )
-
 
 
 
@@ -212,7 +128,7 @@ def load_search_response(pages: SearchPager) -> QueryResponse:
     )
 
 
-def query_documents_service(question: str) -> bool:
+def query_documents_service(question: str,ENGINE_ID: str) -> bool:
     """
     Query documents using a service account for authentication.
     """
@@ -228,12 +144,23 @@ def query_documents_service(question: str) -> bool:
 
     content_search_spec = SearchRequest.ContentSearchSpec(
         summary_spec=SearchRequest.ContentSearchSpec.SummarySpec(
-            summary_result_count=5,
+            summary_result_count=10,
             include_citations=True,
-            # Other specs...
+            model_prompt_spec=SearchRequest.ContentSearchSpec.SummarySpec.ModelPromptSpec(
+            preamble=(
+                "You are a concise, accuracy-first summarization assistant. Given the list of citation documents, produce a single-paragraph summary that:"
+                "- Is about 10 - 15  lines long). Prioritise clarity and depth over brevity, but keep to the length target."
+                "- Explains important findings or claims and *why* they matter (give 1–2 short explanatory sentences per claim)."
+                "- When multiple sources support the same point, list them together, e.g. [1][3]."
+                "- If sources disagree, explicitly call out the disagreement and cite the conflicting sources."
+                "Constraints:"
+                "- Do NOT invent facts or cite sources that were not provided."
+                "- Keep tone neutral and slightly technical."
+                "Output only plain text (no markdown, no bullet lists).")
+                )
         ),
         extractive_content_spec=SearchRequest.ContentSearchSpec.ExtractiveContentSpec(
-            max_extractive_answer_count=3,
+            max_extractive_answer_count=5,
         ),
     )
 
