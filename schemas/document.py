@@ -10,6 +10,7 @@ class IngestRequest(BaseModel):
 class QueryRequest(BaseModel):
     """Schema for the document query request."""
     question: str
+    ENGINE_ID: str
 
 class Citation(BaseModel):
     """Schema for a single citation in the search results."""

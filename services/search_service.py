@@ -44,8 +44,6 @@ def get_gcp_credentials():
     
     return service_account.Credentials.from_service_account_file(credentials_path)
 
-
-
 def load_search_response(pages: SearchPager) -> QueryResponse:
     """
     Loads the search results from a SearchPager object into the QueryResponse Pydantic model.
@@ -69,11 +67,20 @@ def load_search_response(pages: SearchPager) -> QueryResponse:
         if first_response.summary.summary_with_metadata:
             summary_meta = first_response.summary.summary_with_metadata
             
-            source_documents = [ref.document for ref in summary_meta.references]
+            # Build a mapping of citation indices to source documents
+            source_documents = {}
+            if summary_meta.references:
+                for idx, ref in enumerate(summary_meta.references):
+                    source_documents[idx] = ref.document
 
             if summary_meta.citation_metadata:
                 for api_citation in summary_meta.citation_metadata.citations:
-                    source_id = source_documents[0] if source_documents else ""
+                    # Get the correct source document using the citation's source index
+                    source_id = ""
+                    if hasattr(api_citation, 'sources') and api_citation.sources:
+                        # Use the first source index to get the document
+                        source_idx = api_citation.sources[0].reference_index
+                        source_id = source_documents.get(source_idx, "")
                     
                     citations.append(
                         Citation(
@@ -114,10 +121,10 @@ def load_search_response(pages: SearchPager) -> QueryResponse:
 
         results.append(
             SearchResult(
-                # Use the document name/ID as a fallback for title if not present
                 title=doc_data.get("title", doc_info.name),
                 uri=doc_data.get("link", ""),
                 extractive_answers=extractive_answers,
+                extractive_segments=extractive_segments,  # Include segments
             )
         )
 
@@ -128,9 +135,10 @@ def load_search_response(pages: SearchPager) -> QueryResponse:
     )
 
 
-def query_documents_service(question: str,ENGINE_ID: str) -> bool:
+def query_documents_service(question: str,ENGINE_ID: str) -> QueryResponse:
     """
     Query documents using a service account for authentication.
+    Enhanced for NotebookLM-style functionality.
     """
     print("Querying documents...")
     credentials = get_gcp_credentials()
@@ -144,39 +152,57 @@ def query_documents_service(question: str,ENGINE_ID: str) -> bool:
 
     content_search_spec = SearchRequest.ContentSearchSpec(
         summary_spec=SearchRequest.ContentSearchSpec.SummarySpec(
-            summary_result_count=10,
+            summary_result_count=10,  # Increased from 5 for more comprehensive summaries
             include_citations=True,
             model_prompt_spec=SearchRequest.ContentSearchSpec.SummarySpec.ModelPromptSpec(
-            preamble=(
-                "You are a concise, accuracy-first summarization assistant. Given the list of citation documents, produce a single-paragraph summary that:"
-                "- Is about 10 - 15  lines long). Prioritise clarity and depth over brevity, but keep to the length target."
-                "- Explains important findings or claims and *why* they matter (give 1–2 short explanatory sentences per claim)."
-                "- When multiple sources support the same point, list them together, e.g. [1][3]."
-                "- If sources disagree, explicitly call out the disagreement and cite the conflicting sources."
-                "Constraints:"
-                "- Do NOT invent facts or cite sources that were not provided."
-                "- Keep tone neutral and slightly technical."
-                "Output only plain text (no markdown, no bullet lists).")
+                preamble=(
+                    "You are an AI assistant that provides comprehensive, detailed answers "
+                    "based on the provided documents. Synthesize information from multiple "
+                    "sources and provide in-depth responses with proper citations. "
+                    "Be thorough and include relevant details, examples, and context."
                 )
+            ),
+            model_spec=SearchRequest.ContentSearchSpec.SummarySpec.ModelSpec(
+                version="stable",  # or "preview" for latest features
+            ),
+            use_semantic_chunks=True,  # Better understanding of document structure
         ),
         extractive_content_spec=SearchRequest.ContentSearchSpec.ExtractiveContentSpec(
-            max_extractive_answer_count=5,
+            max_extractive_answer_count=5,  # Increased from 3
+            max_extractive_segment_count=5,  # Add extractive segments
+            num_previous_segments=1,  # Include context before
+            num_next_segments=1,  # Include context after
+        ),
+        snippet_spec=SearchRequest.ContentSearchSpec.SnippetSpec(
+            max_snippet_count=5,  # Add snippets for better context
+            return_snippet=True,
         ),
     )
 
     request = SearchRequest(
         serving_config=serving_config,
         query=question,
-        page_size=10,
+        page_size=20,  # Increased from 10 to get more results
         content_search_spec=content_search_spec,
         query_expansion_spec=SearchRequest.QueryExpansionSpec(
             condition=SearchRequest.QueryExpansionSpec.Condition.AUTO
         ),
+        # Enable spell correction
+        spell_correction_spec=SearchRequest.SpellCorrectionSpec(
+            mode=SearchRequest.SpellCorrectionSpec.Mode.AUTO
+        ),
+        # Boost recent documents if timestamp is available
+        boost_spec=SearchRequest.BoostSpec(
+            condition_boost_specs=[
+                SearchRequest.BoostSpec.ConditionBoostSpec(
+                    condition="",  # Add conditions if needed
+                    boost=1.0,
+                )
+            ]
+        ) if False else None,  # Set to True if you want to use boosting
     )
 
-    #get the SearchPager from client
+    # Get the SearchPager from client
     pages = client.search(request)
-
-
     
     return load_search_response(pages)
