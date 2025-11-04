@@ -2,10 +2,10 @@ import os
 from typing import Optional
 from fastapi import status,APIRouter
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from services.ingestion_service import ingestion
+from services.ingestion_service import ingestion,get_documents_by_engine
 from utils.settings import settings
 
-from schemas.document import IngestResponse
+from schemas.document import IngestResponse,DocumentListResponse,DocumentResponse
 
 router=APIRouter()
 
@@ -83,4 +83,171 @@ async def ingest_document_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error during document ingestion: {str(e)}"
+        )
+
+
+@router.get(
+    "/documents/{engine_id}",
+    response_model=DocumentListResponse,
+    summary="List Documents by Engine ID",
+    status_code=status.HTTP_200_OK,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Engine not found or no documents available",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "description": "An error occurred while fetching documents.",
+        }
+    }
+)
+async def list_documents_endpoint(
+    engine_id: str,
+    limit: Optional[int] ,
+    offset: Optional[int] ,
+    sort_order: Optional[str] 
+):
+    """
+    Get a list of all documents uploaded to a specific engine.
+    
+    **Path Parameters:**
+    - **engine_id**: The engine ID to fetch documents for
+    
+    **Query Parameters:**
+    - **limit**: Maximum number of documents to return (default: 100, max: 1000)
+    - **offset**: Number of documents to skip for pagination (default: 0)
+    - **sort_order**: Sort order - asc or desc (default: desc)
+    
+    **Response:**
+    - **engine_id**: The engine ID
+    - **data_store_id**: The data store ID
+    - **total_count**: Total number of documents for this engine
+    - **returned_count**: Number of documents in this response
+    - **documents**: List of document objects with metadata
+    
+    **Example Usage:**
+    ```
+    GET /documents/my-engine-123?limit=50&offset=0&sort_order=desc
+    ```
+    """
+    try:
+        # Validate sort parameters
+        
+        valid_sort_orders = ["asc", "desc"]
+            # Corrected validation
+        if sort_order and sort_order.lower() not in valid_sort_orders:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid sort_order. Must be 'asc' or 'desc'"
+            )
+        
+        # Get documents from service
+        result = get_documents_by_engine(
+            engine_id=engine_id,
+            limit=limit,
+            offset=offset,
+            sort_order=sort_order
+        )
+        
+        if result["total_count"] == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No documents found for engine_id: {engine_id}"
+            )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching documents: {str(e)}"
+        )
+
+
+@router.get(
+    "/documents/{engine_id}/{document_id}",
+    response_model=DocumentResponse,
+    summary="Get Document by ID",
+    status_code=status.HTTP_200_OK,
+)
+async def get_document_endpoint(
+    engine_id: str,
+    document_id: str
+):
+    """
+    Get details of a specific document by its ID.
+    
+    **Path Parameters:**
+    - **engine_id**: The engine ID
+    - **document_id**: The document ID (row ID from database)
+    """
+    try:
+        from services.ingestion_service import get_document_by_id
+        
+        document = get_document_by_id(document_id, engine_id)
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found for engine {engine_id}"
+            )
+        
+        return document
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching document: {str(e)}"
+        )
+
+
+@router.delete(
+    "/documents/{engine_id}/{document_id}",
+    summary="Delete Document",
+    status_code=status.HTTP_200_OK,
+)
+
+async def delete_document_endpoint(
+    engine_id: str,
+    document_id: str,
+    
+):
+    """
+    Delete a document from the database, GCS bucket, and Vertex AI Search index.
+    
+    This performs a multi-step deletion:
+    1. Removes the document from the search index (if requested).
+    2. Deletes the source file from the GCS bucket (if requested).
+    3. Removes the document's metadata record from the local database.
+    """
+    try:
+        
+        from services.ingestion_service import get_document_by_id,delete_document_logic
+        doc = get_document_by_id(document_id=document_id, engine_id=engine_id)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found for engine {engine_id}"
+            )
+        
+        # Call the service layer to perform the deletions
+        result = delete_document_logic(
+            document_id=document_id,
+            engine_id=engine_id,
+            data_store_id=doc["data_store_id"],
+            gcs_uri=doc["gcs_uri"],
+            filename=doc["filename"]
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred during document deletion: {str(e)}"
         )

@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
 class IngestRequest(BaseModel):
     """Schema for the document ingestion request."""
@@ -81,4 +82,69 @@ class EngineInfo(BaseModel):
     engine_id: str
     engine_name: str
     data_store_id: str
-    created_at: str
+
+
+class DocumentResponse(BaseModel):
+    """Response model for a single document"""
+    document_id: str
+    engine_id: str 
+    data_store_id: str 
+    filename: str 
+    gcs_uri: str 
+    file_size: int
+    content_type: str 
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_id": "ds-uieeeeuo083",
+                "engine_id": "my-engine-123",
+                "data_store_id": "my-datastore-123",
+                "filename": "safety_manual.pdf",
+                "gcs_uri": "gs://my-bucket/documents/safety_manual.pdf",
+                "file_size": 2048576,
+                "content_type": "application/pdf",
+                "created_at": "2024-01-15T10:30:00"
+            }
+        }
+
+
+class DocumentListResponse(BaseModel):
+    """Response model for list of documents"""
+    engine_id: str 
+    data_store_id: Optional[str] 
+    total_count: int 
+    returned_count: int 
+    documents: List[DocumentResponse] 
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "engine_id": "my-engine-123",
+                "data_store_id": "my-datastore-123",
+                "total_count": 25,
+                "returned_count": 10,
+                "documents": [
+                    {
+                        "id": 1,
+                        "engine_id": "my-engine-123",
+                        "data_store_id": "my-datastore-123",
+                        "filename": "safety_manual.pdf",
+                        "gcs_uri": "gs://my-bucket/documents/safety_manual.pdf",
+                        "file_size": 2048576,
+                        "content_type": "application/pdf",
+                        "created_at": "2024-01-15T10:30:00"
+                    }
+                ]
+            }
+        }
+
+
+class IngestResponse(BaseModel):
+    """Your existing IngestResponse schema"""
+    success_count: int
+    failure_count: int
+    bucket_name: str
+    gcs_uri: str
+    operation_name: Optional[str] = None
+    message: str

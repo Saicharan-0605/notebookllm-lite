@@ -1,6 +1,7 @@
 import sqlite3
+import uuid
 from contextlib import contextmanager
-from typing import Optional,List
+from typing import Optional,List,Dict,Any
 
 DB_PATH = "notebookllm.db"
 
@@ -25,7 +26,7 @@ def init_database():
     # Create documents table (optional - for tracking uploaded documents)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id TEXT PRIMARY KEY NOT NULL,
             engine_id TEXT NOT NULL,
             data_store_id TEXT NOT NULL,
             filename TEXT NOT NULL,
@@ -132,29 +133,199 @@ def get_all_engines_from_db() -> List[dict]:
         return [dict(row) for row in rows]
 
 
+
+
 def save_document_to_db(
+    document_id: str,
     engine_id: str,
     data_store_id: str,
     filename: str,
     gcs_uri: str,
     file_size: int,
     content_type: str
-) -> int:
+) -> str: 
     """
-    Save uploaded document information to the database.
+    Save uploaded document information to the database using a UUID as the primary key.
     
     Returns:
-        Row ID of the inserted record
+        The UUID (document_id) of the inserted record.
+    """
+    
+    
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO documents (document_id, engine_id, data_store_id, filename, gcs_uri, file_size, content_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (document_id, engine_id, data_store_id, filename, gcs_uri, file_size, content_type))
+        
+        print(f"Document saved to database (UUID: {document_id})")
+        return document_id
+
+def get_documents_by_engine_id(
+    engine_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    sort_by: str = "uploaded_at",
+    sort_order: str = "desc"
+) -> List[Dict[str, Any]]:
+    """
+    Get all documents for a specific engine from the database.
+    
+    Args:
+        engine_id: The engine ID to filter by
+        limit: Maximum number of documents to return
+        offset: Number of documents to skip
+        sort_by: Field to sort by (created_at, filename, file_size)
+        sort_order: Sort order (asc or desc)
+    
+    Returns:
+        List of document dictionaries
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Validate sort parameters to prevent SQL injection
+        valid_sort_fields = {
+            "uploaded_at": "uploaded_at",
+            "filename": "filename",
+            "file_size": "file_size"
+        }
+        sort_field = valid_sort_fields.get(sort_by, "uploaded_at")
+        sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+        
+        query = f"""
+            SELECT 
+                document_id,
+                engine_id,
+                data_store_id,
+                filename,
+                gcs_uri,
+                file_size,
+                content_type,
+                uploaded_at
+            FROM documents
+            WHERE engine_id = ?
+            ORDER BY {sort_field} {sort_direction}
+            LIMIT ? OFFSET ?
+        """
+        
+        cursor.execute(query, (engine_id, limit, offset))
+        
+        columns = [desc[0] for desc in cursor.description]
+        documents = []
+        
+        for row in cursor.fetchall():
+            doc = dict(zip(columns, row))
+            documents.append(doc)
+        
+        return documents
+
+
+def get_total_document_count(engine_id: str) -> int:
+    """
+    Get total count of documents for an engine.
+    
+    Args:
+        engine_id: The engine ID to count documents for
+    
+    Returns:
+        Total number of documents
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
         cursor.execute("""
-            INSERT INTO documents (engine_id, data_store_id, filename, gcs_uri, file_size, content_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (engine_id, data_store_id, filename, gcs_uri, file_size, content_type))
+            SELECT COUNT(*) as count
+            FROM documents
+            WHERE engine_id = ?
+        """, (engine_id,))
         
-        row_id = cursor.lastrowid
-        print(f"Document saved to database (ID: {row_id})")
-        return row_id
+        result = cursor.fetchone()
+        return result[0] if result else 0
 
+
+def get_document_by_id(document_id: str, engine_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a specific document by ID and engine_id.
+    
+    Args:
+        document_id: The document ID
+        engine_id: The engine ID (for security)
+    
+    Returns:
+        Document dictionary or None if not found
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                document_id,
+                engine_id,
+                data_store_id,
+                filename,
+                gcs_uri,
+                file_size,
+                content_type
+            FROM documents
+            WHERE document_id = ? AND engine_id = ?
+        """, (document_id, engine_id))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
+
+
+def delete_document_from_db(document_id: str, engine_id: str) -> bool:
+    """
+    Delete a document from the database.
+    
+    Args:
+        document_id: The document ID to delete
+        engine_id: The engine ID (for security)
+    
+    Returns:
+        True if deleted, False if not found
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            DELETE FROM documents
+            WHERE document_id = ? AND engine_id = ?
+        """, (document_id, engine_id))
+        
+        deleted = cursor.rowcount > 0
+        if deleted:
+            print(f"Document {document_id} deleted from database")
+        
+        return deleted
+    
+
+def delete_documents_table():
+    """
+    Drops the 'documents' table from the database if it exists.
+    """
+    try:
+        # get_db_connection() is expected to return a connection object 
+        # that supports the context manager (the 'with' statement).
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Execute the DROP TABLE command
+            cursor.execute("DROP TABLE IF EXISTS documents")
+            
+            print("Successfully dropped table 'documents'.")
+            
+    except Exception as e:
+        # Handle potential connection or execution errors
+        print(f"An error occurred while trying to drop the table: {e}")
+
+# if __name__ == "__main__":
+#     delete_documents_table()
