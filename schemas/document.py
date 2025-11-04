@@ -1,7 +1,7 @@
 # schemas/documents.py
 
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional,Dict
 from datetime import datetime
 
 class IngestRequest(BaseModel):
@@ -148,3 +148,31 @@ class IngestResponse(BaseModel):
     gcs_uri: str
     operation_name: Optional[str] = None
     message: str
+
+
+class MindMapNode(BaseModel):
+    """Represents a node in the mind map."""
+    id: str
+    label: str
+    level: int
+    parent_id: Optional[str] = None
+    description: Optional[str] = None
+    key_points: List[str] = []
+
+
+class MindMapResponse(BaseModel):
+    """Complete mind map structure including Mermaid diagram."""
+    title: str
+    central_topic: str
+    nodes: List[MindMapNode]
+    relationships: List[Dict[str, str]]
+    mermaid_diagram: str 
+    generation_time: float
+    total_nodes: int
+    sources_used: int
+
+
+class MindMapRequest(BaseModel):
+    """Request for mind map generation."""
+    engine_id: str 
+    

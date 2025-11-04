@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS:str
     LOCATION: str
     PROJECT_ID: str
+    OPENAI_API_KEY: str
 
     class Config:
         env_file = ".env"  # Optional: if you're using a .env file
