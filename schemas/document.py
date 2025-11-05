@@ -138,7 +138,9 @@ class DocumentListResponse(BaseModel):
                 ]
             }
         }
-
+class IngestAcceptedResponse(BaseModel):
+    message: str
+    filename: str
 
 class IngestResponse(BaseModel):
     """Your existing IngestResponse schema"""
@@ -150,6 +152,20 @@ class IngestResponse(BaseModel):
     operation_name: Optional[str] = None
     message: str
 
+
+class TaskCreateResponse(BaseModel):
+    message: str
+    task_id: str
+    filename: str
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    filename: Optional[str]
+    status: str
+    result: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: str
+    updated_at: str
 
 class MindMapNode(BaseModel):
     """Represents a node in the mind map."""

@@ -10,7 +10,7 @@ from utils.settings import settings
 from schemas.document import IngestResponse
 from google.cloud import storage
 from services.gcs_service import _get_or_create_bucket, _upload_file_to_gcs
-from services.database import save_document_to_db,get_documents_by_engine_id,get_total_document_count,delete_document_from_db,get_document_by_id
+from services.database import save_document_to_db,get_documents_by_engine_id,get_total_document_count,delete_document_from_db,update_task_in_db
 
 import hashlib
 
@@ -34,21 +34,26 @@ def _calculate_document_id_from_gcs_uri(gcs_uri: str) -> str:
     
     return document_id
 
-
 def _ingest_document_from_gcs(
     project_id: str,
     location: str,
     data_store_id: str,
-    gcs_uri: str
+    gcs_uri: str,
+    max_wait_time: int = 300,
+    max_retries: int = 3,
+    initial_delay: int = 5
 ) -> dict:
     """
-    Ingest a document from GCS into the data store.
+    Ingest a document from GCS into the data store with retry logic.
     
     Args:
         project_id: GCP project ID
         location: Location of the data store
         data_store_id: Data store ID
         gcs_uri: GCS URI of the document
+        max_wait_time: Maximum time to wait for import (seconds)
+        max_retries: Maximum number of retries
+        initial_delay: Initial delay before first import attempt
     
     Returns:
         Dictionary with ingestion results
@@ -62,47 +67,92 @@ def _ingest_document_from_gcs(
         branch="default_branch",
     )
     
-    gcs_source = GcsSource(
-        input_uris=[gcs_uri],
-        data_schema="content"
-    )
+    for attempt in range(max_retries):
+        try:
+            # Add delay before import to ensure file is ready
+            wait_time = initial_delay if attempt == 0 else initial_delay * (attempt + 1)
+            print(f"Waiting {wait_time}s before import to ensure file is ready...")
+            time.sleep(wait_time)
+            
+            print(f"Starting document import from {gcs_uri}... (Attempt {attempt + 1}/{max_retries})")
+            
+            gcs_source = GcsSource(
+                input_uris=[gcs_uri],
+                data_schema="content"
+            )
+            
+            request = ImportDocumentsRequest(
+                parent=parent_path,
+                gcs_source=gcs_source,
+                reconciliation_mode=ImportDocumentsRequest.ReconciliationMode.INCREMENTAL,
+            )
+            
+            operation = client.import_documents(request=request)
+            
+            print(f"Waiting for import to complete (up to {max_wait_time // 60} minutes)...")
+            response = operation.result(timeout=max_wait_time)
+            
+            # Get metadata
+            metadata = operation.metadata
+            success_count = getattr(metadata, 'success_count', 0)
+            failure_count = getattr(metadata, 'failure_count', 0)
+            
+            print(f"Import complete: {success_count} success, {failure_count} failed")
+            
+            # Check for failures
+            if failure_count > 0:
+                error_samples = getattr(metadata, 'error_samples', [])
+                error_messages = [str(err) for err in error_samples[:3]]
+                raise RuntimeError(f"Import had {failure_count} failures. Errors: {error_messages}")
+            
+            if success_count == 0:
+                raise RuntimeError("Import completed but no documents were successfully imported")
+            
+            # Wait for indexing
+            indexing_wait = 30
+            print(f"Waiting {indexing_wait} seconds for document indexing...")
+            time.sleep(indexing_wait)
+            
+            return {
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "operation_name": operation.operation.name if hasattr(operation, 'operation') else None
+            }
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check if it's a retryable error
+            is_retryable = any(keyword in error_msg for keyword in [
+                "not found", "404", "unavailable", "deadline", "timeout", 
+                "503", "500", "does not exist", "no such object"
+            ])
+            
+            if is_retryable and attempt < max_retries - 1:
+                retry_wait = initial_delay * (attempt + 2)  # Exponential backoff
+                print(f"⚠ Import attempt {attempt + 1} failed: {e}")
+                print(f"   Retrying in {retry_wait}s...")
+                time.sleep(retry_wait)
+            else:
+                raise RuntimeError(f"Document ingestion failed after {attempt + 1} attempts: {e}")
     
-    request = ImportDocumentsRequest(
-        parent=parent_path,
-        gcs_source=gcs_source,
-        reconciliation_mode=ImportDocumentsRequest.ReconciliationMode.INCREMENTAL,
-    )
-    
-    try:
-        print(f"Starting document import from {gcs_uri}...")
-        operation = client.import_documents(request=request)
-        
-        print("Waiting for import to complete (up to 5 minutes)...")
-        response = operation.result(timeout=300)
-        
-        metadata = operation.metadata
-        
-        print(f"Import complete: {metadata.success_count} success, {metadata.failure_count} failed")
-        
-        # Wait for indexing
-        print("Waiting 30 seconds for document indexing...")
-        time.sleep(30)
-        
-        return {
-            "success_count": metadata.success_count,
-            "failure_count": metadata.failure_count,
-            "operation_name": operation.operation.name if metadata.failure_count > 0 else None
-        }
-        
-    except Exception as e:
-        raise RuntimeError(f"Document ingestion failed: {e}")
-    
+    raise RuntimeError(f"Failed to import document after {max_retries} attempts")
 
+
+def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str):
+    """
+    Complete document ingestion workflow with improved error handling.
+    """
+    print(f"\n{'='*80}")
+    print(f"DOCUMENT INGESTION STARTED")
+    print(f"Engine: {engine_id}")
+    print(f"Data Store: {data_store_id}")
+    print(f"File: {file.filename}")
+    print(f"{'='*80}\n")
     
-async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
-        
-        # Step 1: Get or create GCS bucket
+    # Step 1: Get or create GCS bucket
     try:
+        update_task_in_db(task_id, status="processing")
         bucket_name = _get_or_create_bucket(
             engine_id=engine_id,
             data_store_id=data_store_id,
@@ -117,20 +167,25 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
     
     # Step 2: Read and upload file to GCS
     try:
-        file_content = await file.read()
-        file_size=len(file_content)
+        file.file.seek(0)  # Reset file pointer
+        file_content = file.file.read()
+        file_size = len(file_content)
         
-        if len(file_content) == 0:
+        if file_size == 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File is empty"
             )
         
+        print(f"File size: {file_size:,} bytes")
+        
         gcs_uri = _upload_file_to_gcs(
             project_id=settings.PROJECT_ID,
             bucket_name=bucket_name,
             file_content=file_content,
-            filename=file.filename
+            filename=file.filename,
+            max_retries=1,
+            retry_delay=2
         )
         
     except HTTPException:
@@ -139,15 +194,18 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload file to GCS: {str(e)}"
-            )
-        
-        # Step 3: Ingest document into data store
+        )
+    
+    # Step 3: Ingest document into data store with retry logic
     try:
         ingest_result = _ingest_document_from_gcs(
             project_id=settings.PROJECT_ID,
             location=settings.LOCATION,
             data_store_id=data_store_id,
-            gcs_uri=gcs_uri
+            gcs_uri=gcs_uri,
+            max_wait_time=600,
+            max_retries=1,
+            initial_delay=10
         )
         
     except Exception as e:
@@ -155,8 +213,10 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to ingest document: {str(e)}"
         )
+    
+    # Step 4: Save to database
     try:
-        document_id=_calculate_document_id_from_gcs_uri( gcs_uri=gcs_uri)
+        document_id = _calculate_document_id_from_gcs_uri(gcs_uri=gcs_uri)
         save_document_to_db(
             document_id=document_id,
             engine_id=engine_id,
@@ -166,8 +226,17 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
             file_size=file_size,
             content_type=file.content_type or "application/octet-stream"
         )
+        print(f"✓ Document saved to database (ID: {document_id})")
+        success_message = f"Successfully ingested document. GCS URI: {gcs_uri}"
+        update_task_in_db(task_id, status="completed", result=success_message)
+        
+        
     except Exception as e:
-        print(f"⚠️  Failed to save document to database: {e}")
+        print(f"⚠️ Failed to save document to database: {e}")
+        error_message = f"An error occurred: {str(e)}"
+        update_task_in_db(task_id, status="failed", error=error_message)
+        # Don't fail the entire operation if DB save fails
+        document_id = None
     
     # Build response
     response = IngestResponse(
@@ -184,9 +253,11 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
         )
     )
     
-    print(f"\n Ingestion complete!")
+    print(f"\n{'='*80}")
+    print(f"✓ INGESTION COMPLETE!")
+    print(f"{'='*80}\n")
+    
     return response
-
 
 def get_documents_by_engine(
     engine_id: str,

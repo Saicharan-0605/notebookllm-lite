@@ -1,91 +1,92 @@
 import os
+import uuid
 from typing import Optional
+import asyncio
 from fastapi import status,APIRouter
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form,BackgroundTasks
 from services.ingestion_service import ingestion,get_documents_by_engine
+from services.database import create_task_in_db
 from utils.settings import settings
 
-from schemas.document import IngestResponse,DocumentListResponse,DocumentResponse
+from schemas.document import IngestResponse,DocumentListResponse,DocumentResponse,TaskCreateResponse
 
 router=APIRouter()
 
 @router.post(
     "/ingest-document",
-    response_model=IngestResponse,
-    summary="Ingest Document into Data Store",
-    status_code=status.HTTP_200_OK,
+    
+    response_model=TaskCreateResponse,
+    summary="Accept Document for Background Ingestion",
+    status_code=status.HTTP_202_ACCEPTED,
     responses={
-        status.HTTP_500_INTERNAL_SERVER_ERROR: {
-            "description": "An error occurred during document ingestion.",
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Bad request, e.g., no file provided or unsupported file type."
         }
     }
 )
 async def ingest_document_endpoint(
+    background_tasks: BackgroundTasks,
     data_store_id: str = Form(..., description="Data store ID"),
     engine_id: str = Form(..., description="Engine ID"),
-    file: UploadFile = File(..., description="Document file to upload (PDF, DOCX, TXT, etc.)")
+    file: UploadFile = File(..., description="Document file to upload")
 ):
     """
-    Upload and ingest a document into a Vertex AI Search data store.
+    Accepts a document and begins the ingestion process in the background.
     
-    This endpoint:
-    1. Creates or reuses a GCS bucket for the data store
-    2. Uploads the file to GCS
-    3. Ingests the document into the data store
-    4. Waits for indexing to complete
-    
-    **Form Data:**
-    - **data_store_id**: The data store ID (returned from /create-engine)
-    - **engine_id**: The engine ID (returned from /create-engine)
-    - **file**: The document file to upload
-    
-    **Supported File Types:**
-    - PDF (.pdf)
-    - Microsoft Word (.docx, .doc)
-    - Text (.txt)
-    - HTML (.html, .htm)
-    - Markdown (.md)
-    
-    **Response:**
-    - **success_count**: Number of documents successfully ingested
-    - **failure_count**: Number of documents that failed
-    - **bucket_name**: GCS bucket where file was uploaded
-    - **gcs_uri**: Full GCS URI of the uploaded file
-    - **operation_name**: Operation name (if there were failures)
-    - **message**: Status message
-    
-    **Note:** Document ingestion takes 1-3 minutes. The document will be searchable
-    30 seconds after the operation completes.
+    This endpoint returns an immediate response, and the document processing
+    (GCS upload, Vertex AI ingestion) happens asynchronously.
     """
-    try:
-        if not file.filename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No file provided"
-            )
-        
-        # Check file extension
-        allowed_extensions = {'.pdf', '.docx', '.doc', '.txt', '.html', '.htm', '.md'}
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        
-        if file_ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
-            )
-        
-       
-        return await ingestion(file=file, engine_id=engine_id, data_store_id=data_store_id)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
+    task_id = str(uuid.uuid4())
+    create_task_in_db(task_id=task_id, filename=file.filename)
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file provided")
+    
+    allowed_extensions = {'.pdf', '.docx', '.doc', '.txt', '.html', '.htm', '.md'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    
+    if file_ext not in allowed_extensions:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error during document ingestion: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
         )
+    
+    # Schedule the long-running task
+    await asyncio.to_thread(
+        ingestion,
+        task_id=task_id, 
+        file=file, 
+        engine_id=engine_id, 
+        data_store_id=data_store_id
+    )
+    
+    
+    return TaskCreateResponse(
+        message="Document ingestion has been accepted and is processing in the background.",
+        task_id=task_id,
+        filename=file.filename
+    )
 
-# ... (imports and decorator are the same) ...
+from schemas.document import TaskStatusResponse
+from services.database import get_task_from_db
+
+@router.get(
+    "/tasks/{task_id}",
+    response_model=TaskStatusResponse,
+    summary="Get Background Task Status",
+    status_code=status.HTTP_200_OK,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Task not found"}
+    }
+)
+async def get_task_status_endpoint(task_id: str):
+    """
+    Poll this endpoint to check the status of a background ingestion task.
+    """
+    task = get_task_from_db(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return task
 
 @router.get(
     "/documents/{engine_id}",

@@ -37,6 +37,28 @@ def init_database():
             FOREIGN KEY (engine_id) REFERENCES engines(engine_id)
         )
     """)
+
+        # In your init_database() function
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            task_id TEXT PRIMARY KEY NOT NULL,
+            filename TEXT,
+            status TEXT NOT NULL,
+            result TEXT,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Create a trigger to auto-update the 'updated_at' timestamp
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS update_tasks_updated_at
+        AFTER UPDATE ON tasks FOR EACH ROW
+        BEGIN
+            UPDATE tasks SET updated_at = CURRENT_TIMESTAMP WHERE task_id = OLD.task_id;
+        END;
+    """)
     
     conn.commit()
     conn.close()
@@ -132,6 +154,32 @@ def get_all_engines_from_db() -> List[dict]:
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+
+
+def create_task_in_db(task_id: str, filename: str) -> None:
+    """Creates a new task record in the database."""
+    init_database()
+    with get_db_connection() as conn:
+        conn.cursor().execute(
+            "INSERT INTO tasks (task_id, filename, status) VALUES (?, ?, ?)",
+            (task_id, filename, "pending")
+        )
+
+def update_task_in_db(task_id: str, status: str, result: str = None, error: str = None) -> None:
+    """Updates the status and result/error of a task."""
+    with get_db_connection() as conn:
+        conn.cursor().execute(
+            "UPDATE tasks SET status = ?, result = ?, error_message = ? WHERE task_id = ?",
+            (status, result, error, task_id)
+        )
+
+def get_task_from_db(task_id: str) -> Dict[str, Any] | None:
+    """Retrieves a task record from the database."""
+    with get_db_connection() as conn:
+        row = conn.cursor().execute(
+            "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 
