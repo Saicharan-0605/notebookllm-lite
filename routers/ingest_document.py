@@ -85,16 +85,15 @@ async def ingest_document_endpoint(
             detail=f"Unexpected error during document ingestion: {str(e)}"
         )
 
+# ... (imports and decorator are the same) ...
 
 @router.get(
     "/documents/{engine_id}",
     response_model=DocumentListResponse,
     summary="List Documents by Engine ID",
     status_code=status.HTTP_200_OK,
+    # You can remove the 404 response from the docs if you make this change
     responses={
-        status.HTTP_404_NOT_FOUND: {
-            "description": "Engine not found or no documents available",
-        },
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "description": "An error occurred while fetching documents.",
         }
@@ -106,53 +105,23 @@ async def list_documents_endpoint(
     offset: Optional[int] ,
     sort_order: Optional[str] 
 ):
-    """
-    Get a list of all documents uploaded to a specific engine.
     
-    **Path Parameters:**
-    - **engine_id**: The engine ID to fetch documents for
-    
-    **Query Parameters:**
-    - **limit**: Maximum number of documents to return (default: 100, max: 1000)
-    - **offset**: Number of documents to skip for pagination (default: 0)
-    - **sort_order**: Sort order - asc or desc (default: desc)
-    
-    **Response:**
-    - **engine_id**: The engine ID
-    - **data_store_id**: The data store ID
-    - **total_count**: Total number of documents for this engine
-    - **returned_count**: Number of documents in this response
-    - **documents**: List of document objects with metadata
-    
-    **Example Usage:**
-    ```
-    GET /documents/my-engine-123?limit=50&offset=0&sort_order=desc
-    ```
-    """
     try:
-        # Validate sort parameters
         
         valid_sort_orders = ["asc", "desc"]
-            # Corrected validation
         if sort_order and sort_order.lower() not in valid_sort_orders:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid sort_order. Must be 'asc' or 'desc'"
             )
         
-        # Get documents from service
+        
         result = get_documents_by_engine(
             engine_id=engine_id,
             limit=limit,
             offset=offset,
             sort_order=sort_order
         )
-        
-        if result["total_count"] == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No documents found for engine_id: {engine_id}"
-            )
         
         return result
         
@@ -163,11 +132,12 @@ async def list_documents_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching documents: {str(e)}"
         )
+    
 
 
 @router.get(
     "/documents/{engine_id}/{document_id}",
-    response_model=DocumentResponse,
+    response_model=Optional[DocumentResponse],
     summary="Get Document by ID",
     status_code=status.HTTP_200_OK,
 )
@@ -177,6 +147,7 @@ async def get_document_endpoint(
 ):
     """
     Get details of a specific document by its ID.
+    Returns null if document not found.
     
     **Path Parameters:**
     - **engine_id**: The engine ID
@@ -187,16 +158,9 @@ async def get_document_endpoint(
         
         document = get_document_by_id(document_id, engine_id)
         
-        if not document:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document {document_id} not found for engine {engine_id}"
-            )
-        
+        # Returns None if not found, which will be null in JSON
         return document
         
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
