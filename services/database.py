@@ -307,6 +307,108 @@ def delete_document_from_db(document_id: str, engine_id: str) -> bool:
         
         return deleted
     
+def delete_engine_from_db(engine_id: str) -> bool:
+    """
+    Delete an engine from the database.
+    
+    Args:
+        engine_id: The engine ID to delete
+    
+    Returns:
+        True if deleted, False if not found
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM engines WHERE engine_id = ?", (engine_id,))
+        deleted = cursor.rowcount > 0
+        
+        if deleted:
+            print(f" Engine '{engine_id}' deleted from database")
+        else:
+            print(f" Engine '{engine_id}' not found in database")
+        
+        return deleted
+
+
+def delete_documents_by_engine(engine_id: str) -> int:
+    """
+    Delete all documents associated with an engine.
+    
+    Args:
+        engine_id: The engine ID
+    
+    Returns:
+        Number of documents deleted
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM documents WHERE engine_id = ?", (engine_id,))
+        deleted_count = cursor.rowcount
+        
+        print(f" Deleted {deleted_count} documents for engine '{engine_id}'")
+        return deleted_count
+
+
+def get_engines_by_datastore(data_store_id: str) -> List[dict]:
+    """
+    Get all engines that use a specific data store.
+    
+    Args:
+        data_store_id: The data store ID
+    
+    Returns:
+        List of dictionaries with engine info
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, engine_id, engine_name, data_store_id, created_at
+            FROM engines
+            WHERE data_store_id = ?
+        """, (data_store_id,))
+        
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    
+def get_other_engines_using_datastore(data_store_id: str, exclude_engine_id: str) -> List[str]:
+    """
+    Get all other engines that use a specific data store, excluding a given engine.
+    
+    Args:
+        data_store_id: The data store ID to check
+        exclude_engine_id: Engine ID to exclude from results
+    
+    Returns:
+        List of engine IDs using the data store
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT engine_id FROM engines WHERE data_store_id = ? AND engine_id != ?",
+            (data_store_id, exclude_engine_id)
+        )
+        rows = cursor.fetchall()
+        return [row['engine_id'] for row in rows]
+    
+def get_document_gcs_uris_by_engine(engine_id: str) -> List[str]:
+    """
+    Get all GCS URIs for documents associated with an engine.
+    
+    Args:
+        engine_id: The engine ID
+    
+    Returns:
+        List of GCS URIs
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT gcs_uri FROM documents WHERE engine_id = ?",
+            (engine_id,)
+        )
+        rows = cursor.fetchall()
+        return [row['gcs_uri'] for row in rows if row['gcs_uri']]
+    
 
 def delete_documents_table():
     """

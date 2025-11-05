@@ -176,6 +176,7 @@ async def ingestion(file: UploadFile, engine_id: str, data_store_id: str):
         bucket_name=bucket_name,
         gcs_uri=gcs_uri,
         operation_name=ingest_result.get("operation_name"),
+        document_id=document_id,
         message=(
             f"Document '{file.filename}' ingested successfully. "
             f"Success: {ingest_result['success_count']}, "

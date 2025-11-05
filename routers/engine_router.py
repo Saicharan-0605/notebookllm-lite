@@ -1,13 +1,10 @@
-import os
 from typing import List
-from fastapi import FastAPI, HTTPException, status,UploadFile, File, Form,APIRouter
-from pydantic import BaseModel, Field
-from google.api_core.exceptions import  NotFound
-from google.cloud.discoveryengine_v1 import ( 
-    EngineServiceClient  
-)
+from fastapi import HTTPException, status, APIRouter
 
-from services.create_engine import _create_enterprise_engine_logic,get_engines_details
+from google.api_core.exceptions import  NotFound
+
+
+from services.create_engine import _create_enterprise_engine_logic,get_engines_details,_delete_engine_logic
 from schemas.document import EngineCreationRequest,EngineResponse,EngineInfo
 from services.database import get_all_engines_from_db
 
@@ -123,4 +120,47 @@ async def list_engines():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve engines from database: {str(e)}"
+        )
+
+
+
+@router.delete(
+    "/delete-engine/{engine_id}",
+    response_model=dict,
+    summary="Delete a Discovery Engine, Data Store, and GCS Files",
+    status_code=status.HTTP_200_OK,
+)
+async def delete_engine_endpoint(
+    engine_id: str,
+    delete_data_store: bool = True,
+    delete_gcs_files: bool = True
+):
+    """
+    Delete an existing Enterprise Edition engine and all associated resources.
+
+    **Deletion Order:**
+    1. Engine from Google Cloud
+    2. GCS files (retrieved from documents table)
+    3. Data Store from Google Cloud
+    4. Engine record from database
+    5. Document records from database
+
+    **Query Parameters:**
+    - **delete_data_store**: If true, delete the data store (default: true)
+    - **delete_gcs_files**: If true, delete all GCS files (default: true)
+    """
+    try:
+        result_data = _delete_engine_logic(
+            engine_id=engine_id,
+            delete_data_store=delete_data_store,
+            delete_gcs_files=delete_gcs_files
+        )
+        return result_data["result"]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete engine. Error: {str(e)}"
         )

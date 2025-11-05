@@ -146,6 +146,7 @@ class IngestResponse(BaseModel):
     failure_count: int
     bucket_name: str
     gcs_uri: str
+    document_id: str
     operation_name: Optional[str] = None
     message: str
 
