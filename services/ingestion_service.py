@@ -9,7 +9,7 @@ from typing import Dict,Any
 from utils.settings import settings
 from schemas.document import IngestResponse
 from google.cloud import storage
-from services.gcs_service import _get_or_create_bucket, _upload_file_to_gcs
+from services.gcs_service import _get_gcs_bucket, _upload_file_to_gcs
 from services.database import save_document_to_db,get_documents_by_engine_id,get_total_document_count,delete_document_from_db,update_task_in_db
 
 import hashlib
@@ -39,7 +39,6 @@ def _ingest_document_from_gcs(
     location: str,
     data_store_id: str,
     gcs_uri: str,
-    max_wait_time: int = 300,
     max_retries: int = 3,
     initial_delay: int = 5
 ) -> dict:
@@ -89,8 +88,8 @@ def _ingest_document_from_gcs(
             
             operation = client.import_documents(request=request)
             
-            print(f"Waiting for import to complete (up to {max_wait_time // 60} minutes)...")
-            response = operation.result(timeout=max_wait_time)
+            print(f"Waiting for import to complete ...")
+            response = operation.result()
             
             # Get metadata
             metadata = operation.metadata
@@ -153,16 +152,15 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
     # Step 1: Get or create GCS bucket
     try:
         update_task_in_db(task_id, status="processing")
-        bucket_name = _get_or_create_bucket(
-            engine_id=engine_id,
-            data_store_id=data_store_id,
+        bucket_name_to_find = f"{engine_id}-{data_store_id}".lower().replace("_", "-")[:63]
+        bucket_name = _get_gcs_bucket(
             project_id=settings.PROJECT_ID,
-            location=settings.LOCATION
+            bucket_name=bucket_name_to_find
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create/access GCS bucket: {str(e)}"
+            detail=f"Failed to access GCS bucket: {str(e)}"
         )
     
     # Step 2: Read and upload file to GCS
@@ -203,7 +201,6 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
             location=settings.LOCATION,
             data_store_id=data_store_id,
             gcs_uri=gcs_uri,
-            max_wait_time=600,
             max_retries=1,
             initial_delay=10
         )

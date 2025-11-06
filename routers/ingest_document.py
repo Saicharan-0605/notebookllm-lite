@@ -12,6 +12,22 @@ from schemas.document import IngestResponse,DocumentListResponse,DocumentRespons
 
 router=APIRouter()
 
+
+async def ingest( ingestion,
+        task_id, 
+        file, 
+        engine_id, 
+        data_store_id):
+    await asyncio.to_thread(
+        ingestion,
+        task_id=task_id, 
+        file=file, 
+        engine_id=engine_id, 
+        data_store_id=data_store_id
+    )
+    
+
+
 @router.post(
     "/ingest-document",
     
@@ -25,10 +41,10 @@ router=APIRouter()
     }
 )
 async def ingest_document_endpoint(
-    background_tasks: BackgroundTasks,
+    bg_task:BackgroundTasks,
     data_store_id: str = Form(..., description="Data store ID"),
     engine_id: str = Form(..., description="Engine ID"),
-    file: UploadFile = File(..., description="Document file to upload")
+    file: UploadFile = File(..., description="Document file to upload"),
 ):
     """
     Accepts a document and begins the ingestion process in the background.
@@ -51,13 +67,12 @@ async def ingest_document_endpoint(
         )
     
     # Schedule the long-running task
-    await asyncio.to_thread(
-        ingestion,
+    bg_task.add_task(ingest, ingestion,
         task_id=task_id, 
         file=file, 
         engine_id=engine_id, 
-        data_store_id=data_store_id
-    )
+        data_store_id=data_store_id)
+    
     
     
     return TaskCreateResponse(

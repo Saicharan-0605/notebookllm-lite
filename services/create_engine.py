@@ -2,7 +2,7 @@ import uuid
 from fastapi import status,HTTPException
 from google.api_core.exceptions import AlreadyExists,NotFound
 from services.datastore_service import _create_data_store
-from services.gcs_service import _delete_gcs_bucket_and_files
+from services.gcs_service import _create_gcs_bucket,_delete_gcs_bucket_and_files
 from services.database import get_engine_from_db,init_database,save_engine_to_db,delete_documents_by_engine,delete_engine_from_db,get_other_engines_using_datastore
 from google.cloud.discoveryengine_v1 import (
     Engine, 
@@ -77,6 +77,17 @@ def _create_enterprise_engine_logic(
         
         operation = engine_client.create_engine(request=request)
         response = operation.result(timeout=900)
+
+        bucket_name = f"{engine_id}-{actual_data_store_id}".lower().replace("_", "-")[:63]
+        bucket_location = "us" if settings.LOCATION == "global" else settings.LOCATION.lower()
+        
+        # Call the dedicated create bucket function
+        _create_gcs_bucket(
+            project_id=settings.PROJECT_ID,
+            bucket_name=bucket_name,
+            location=bucket_location
+        )
+        
         db=init_database()
 
         save_engine_to_db(

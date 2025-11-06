@@ -3,111 +3,94 @@ import time
 from google.api_core.exceptions import  NotFound,Conflict
 from typing import Optional, Tuple
 from services.database import get_document_gcs_uris_by_engine
-def _get_or_create_bucket(
-    engine_id: str, 
-    data_store_id: str,
-    project_id: str, 
-    location: str = "us",
+
+def _create_gcs_bucket(
+    project_id: str,
+    bucket_name: str,
+    location: str,
+) -> str:
+    """
+    Creates a new GCS bucket and waits for it to propagate.
+    This function is intended to be called ONCE during engine setup.
+
+    Args:
+        project_id: The GCP project ID.
+        bucket_name: The globally unique name for the new bucket.
+        location: The GCS location for the bucket (e.g., "us-central1").
+
+    Returns:
+        The name of the created bucket.
+        Raises RuntimeError on persistent failure.
+    """
+    try:
+        print(f"Attempting to create new GCS bucket: '{bucket_name}' in location '{location}'...")
+        storage_client = storage.Client(project=project_id)
+        
+        bucket_to_create = storage_client.bucket(bucket_name)
+        bucket_to_create.storage_class = "STANDARD"
+        
+        storage_client.create_bucket(bucket_to_create, location=location)
+        print(f"Bucket '{bucket_name}' creation request sent successfully.")
+        
+        # CRITICAL: Wait for bucket to be fully propagated across GCS services.
+        propagation_wait = 15
+        print(f"Waiting {propagation_wait}s for bucket to propagate...")
+        time.sleep(propagation_wait)
+        
+        # Final verification to ensure it's ready
+        storage_client.get_bucket(bucket_name)
+        print(f"✓ Bucket '{bucket_name}' created and verified.")
+        return bucket_name
+
+    except Conflict:
+        # This is a rare race condition, but it's safe to assume it's ready.
+        print(f"Conflict: Bucket '{bucket_name}' already existed. Assuming it's ready for use.")
+        return bucket_name
+    except Exception as e:
+        # If bucket creation fails for any other reason, it's a critical error.
+        raise RuntimeError(f"Failed to create and verify GCS bucket '{bucket_name}'. Error: {e}")
+def _get_gcs_bucket(
+    project_id: str,
+    bucket_name: str,
     max_retries: int = 3,
     retry_delay: int = 2
 ) -> str:
     """
-    Get or create a GCS bucket for the data store with retry logic.
-    
+    Checks for a GCS bucket's existence and accessibility with retries.
+    This function is intended to be called during document ingestion.
+
     Args:
-        engine_id: Engine ID (used in bucket name)
-        data_store_id: Data store ID (used in bucket name)
-        project_id: GCP project ID
-        location: GCS bucket location
-        max_retries: Maximum number of retries
-        retry_delay: Delay between retries in seconds
-    
+        project_id: The GCP project ID.
+        bucket_name: The name of the bucket to find.
+        max_retries: Maximum number of retries for transient network errors.
+        retry_delay: Delay between retries in seconds.
+
     Returns:
-        Bucket name
+        The bucket name if it is found and accessible.
+        Raises RuntimeError if the bucket is not found or if a persistent error occurs.
     """
+    print(f"Attempting to find GCS bucket '{bucket_name}'...")
     storage_client = storage.Client(project=project_id)
-    
-    # Generate bucket name: datastore-id with valid GCS naming
-    bucket_name = f"{engine_id}-{data_store_id}".lower()
-    bucket_name = bucket_name.replace("_", "-")[:63]  # GCS bucket name limit
-    
+
     for attempt in range(max_retries):
         try:
-            # Check if bucket exists
-            bucket = storage_client.get_bucket(bucket_name)
-            print(f"Bucket '{bucket_name}' already exists. Reusing it.")
+            storage_client.get_bucket(bucket_name)
+            print(f"✓ Found bucket '{bucket_name}'.")
             return bucket_name
-            
         except NotFound:
-            # Bucket doesn't exist, try to create it
-            try:
-                print(f"Creating new bucket: {bucket_name} (Attempt {attempt + 1}/{max_retries})")
-                bucket = storage_client.bucket(bucket_name)
-                bucket.storage_class = "STANDARD"
-                
-                # Set location based on data store location
-                if location == "global":
-                    bucket_location = "us"  # Default to US for global
-                else:
-                    bucket_location = location.lower()
-                
-                # Create the bucket
-                new_bucket = storage_client.create_bucket(bucket, location=bucket_location)
-                print(f"Bucket '{bucket_name}' created successfully in {bucket_location}.")
-                
-                # CRITICAL: Wait longer for bucket to be fully propagated across all GCS services
-                # The Document AI/Vertex AI Search service needs time to recognize the new bucket
-                propagation_wait = 15  # Increased from 3 to 15 seconds
-                print(f"Waiting {propagation_wait}s for bucket to propagate across all GCS services...")
-                time.sleep(propagation_wait)
-                
-                # Verify bucket is accessible
-                verify_bucket = storage_client.get_bucket(bucket_name)
-                print(f"✓ Bucket '{bucket_name}' is ready and accessible.")
-                return bucket_name
-                
-            except Conflict:
-                # Bucket was created by another process (race condition)
-                print(f"Bucket '{bucket_name}' was created by another process. Retrieving it.")
-                time.sleep(retry_delay)
-                try:
-                    bucket = storage_client.get_bucket(bucket_name)
-                    return bucket_name
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        print(f"⚠ Failed to retrieve bucket: {e}. Retrying in {retry_delay}s...")
-                        time.sleep(retry_delay)
-                    else:
-                        raise RuntimeError(f"Failed to retrieve bucket after conflict: {e}")
-                        
-            except Exception as e:
-                error_msg = str(e).lower()
-                is_retryable = any(keyword in error_msg for keyword in [
-                    "unavailable", "deadline", "timeout", "503", "500"
-                ])
-                
-                if is_retryable and attempt < max_retries - 1:
-                    print(f"⚠ Bucket creation attempt {attempt + 1} failed: {e}")
-                    print(f"   Retrying in {retry_delay}s...")
-                    time.sleep(retry_delay)
-                else:
-                    raise RuntimeError(f"Failed to create bucket after {attempt + 1} attempts: {e}")
-                    
+            # This is a fatal configuration error. The bucket should already exist.
+            raise RuntimeError(f"Configuration Error: Bucket '{bucket_name}' was not found. It should have been created with its engine.")
         except Exception as e:
-            # Unexpected error when checking bucket existence
-            error_msg = str(e).lower()
-            is_retryable = any(keyword in error_msg for keyword in [
-                "unavailable", "deadline", "timeout", "503", "500"
-            ])
-            
-            if is_retryable and attempt < max_retries - 1:
-                print(f"⚠ Attempt {attempt + 1} to access bucket failed: {e}")
-                print(f"   Retrying in {retry_delay}s...")
+            # Handle transient network/API errors that are worth retrying
+            if "unavailable" in str(e).lower() and attempt < max_retries - 1:
+                print(f"⚠ Bucket check failed (transient error): {e}. Retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
             else:
-                raise RuntimeError(f"Failed to get or create bucket: {e}")
+                # Re-raise the exception if it's not retryable or retries are exhausted
+                raise RuntimeError(f"A persistent error occurred while trying to access bucket '{bucket_name}': {e}")
     
-    raise RuntimeError(f"Failed to get or create bucket '{bucket_name}' after {max_retries} attempts")
+    # This line should not be reached but is a fallback
+    raise RuntimeError(f"Failed to find bucket '{bucket_name}' after {max_retries} attempts.")
 
 
 def _upload_file_to_gcs(

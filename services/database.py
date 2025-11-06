@@ -42,6 +42,7 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
             task_id TEXT PRIMARY KEY NOT NULL,
+            document_id TEXT PRIMARY KEY NOT NULL,
             filename TEXT,
             status TEXT NOT NULL,
             result TEXT,
