@@ -161,6 +161,7 @@ class TaskCreateResponse(BaseModel):
 class TaskStatusResponse(BaseModel):
     task_id: str
     filename: Optional[str]
+    document_id: str
     status: str
     result: Optional[str] = None
     error_message: Optional[str] = None

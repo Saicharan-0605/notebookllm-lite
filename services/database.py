@@ -3,7 +3,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Optional,List,Dict,Any
 
-DB_PATH = "notebookllm.db"
+DB_PATH = r"C:\Users\Yaswanth\notebookllm\notebookllm-lite\notebookllm.db"
 
 def init_database():
     """
@@ -42,7 +42,7 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
             task_id TEXT PRIMARY KEY NOT NULL,
-            document_id TEXT PRIMARY KEY NOT NULL,
+            document_id TEXT,
             filename TEXT,
             status TEXT NOT NULL,
             result TEXT,
@@ -166,12 +166,12 @@ def create_task_in_db(task_id: str, filename: str) -> None:
             (task_id, filename, "pending")
         )
 
-def update_task_in_db(task_id: str, status: str, result: str = None, error: str = None) -> None:
+def update_task_in_db(task_id: str,document_id:str, status: str, result: str = None, error: str = None) -> None:
     """Updates the status and result/error of a task."""
     with get_db_connection() as conn:
         conn.cursor().execute(
-            "UPDATE tasks SET status = ?, result = ?, error_message = ? WHERE task_id = ?",
-            (status, result, error, task_id)
+            "UPDATE tasks SET status = ?, result = ?,document_id = ?, error_message = ? WHERE task_id = ?",
+            (status, result,document_id, error, task_id)
         )
 
 def get_task_from_db(task_id: str) -> Dict[str, Any] | None:
@@ -470,9 +470,9 @@ def delete_documents_table():
             cursor = conn.cursor()
             
             # Execute the DROP TABLE command
-            cursor.execute("DROP TABLE IF EXISTS documents")
+            cursor.execute("DROP TABLE IF EXISTS tasks")
             
-            print("Successfully dropped table 'documents'.")
+            print("Successfully dropped table 'tasks'.")
             
     except Exception as e:
         # Handle potential connection or execution errors

@@ -151,7 +151,7 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
     
     # Step 1: Get or create GCS bucket
     try:
-        update_task_in_db(task_id, status="processing")
+        
         bucket_name_to_find = f"{engine_id}-{data_store_id}".lower().replace("_", "-")[:63]
         bucket_name = _get_gcs_bucket(
             project_id=settings.PROJECT_ID,
@@ -185,6 +185,8 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
             max_retries=1,
             retry_delay=2
         )
+        document_id = _calculate_document_id_from_gcs_uri(gcs_uri=gcs_uri)
+        update_task_in_db(task_id,document_id, status="processing")
         
     except HTTPException:
         raise
@@ -196,6 +198,7 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
     
     # Step 3: Ingest document into data store with retry logic
     try:
+        
         ingest_result = _ingest_document_from_gcs(
             project_id=settings.PROJECT_ID,
             location=settings.LOCATION,
@@ -213,7 +216,7 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
     
     # Step 4: Save to database
     try:
-        document_id = _calculate_document_id_from_gcs_uri(gcs_uri=gcs_uri)
+        
         save_document_to_db(
             document_id=document_id,
             engine_id=engine_id,
@@ -225,13 +228,13 @@ def ingestion(task_id: str,file: UploadFile, engine_id: str, data_store_id: str)
         )
         print(f"✓ Document saved to database (ID: {document_id})")
         success_message = f"Successfully ingested document. GCS URI: {gcs_uri}"
-        update_task_in_db(task_id, status="completed", result=success_message)
+        update_task_in_db(task_id,document_id,status="completed", result=success_message)
         
         
     except Exception as e:
         print(f"⚠️ Failed to save document to database: {e}")
         error_message = f"An error occurred: {str(e)}"
-        update_task_in_db(task_id, status="failed", error=error_message)
+        update_task_in_db(task_id, document_id,status="failed", error=error_message)
         # Don't fail the entire operation if DB save fails
         document_id = None
     
